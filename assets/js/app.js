@@ -5,6 +5,7 @@
 // por esc() antes de embeberse — sin excepciones.
 // =====================================================================
 
+
 // Escapa caracteres HTML peligrosos. Sirve tanto para texto como para
 // el contenido de atributos siempre que estos usen comillas dobles.
 function esc(s) {
@@ -238,14 +239,14 @@ function loadData(key, fallback) {
     return fallback;
   }
 }
-function initAppData() {
-  APP.products = loadData('products', DEFAULT_PRODUCTS).map(normalizarProducto);
+async function initAppData() {
+  APP.products = await getProductos();
   APP.quotes = loadData('quotes', []).map(normalizarCotizacion);
   APP.quoteCounter = loadData('quoteCounter', 0);
 }
 
 // Autenticación
-function handleLogin() {
+async function handleLogin() {
   var email = document.getElementById('login-email').value.trim();
   var pass = document.getElementById('login-password').value;
   var users = loadData('users', DEFAULT_USERS);
@@ -257,7 +258,7 @@ function handleLogin() {
   document.getElementById('user-name').textContent = user.nombre;
   document.getElementById('user-role').textContent = user.rol === 'admin' ? 'Administrador' : 'Vendedor';
   document.getElementById('user-avatar').textContent = user.nombre.charAt(0).toUpperCase();
-  initAppData();
+  await initAppData();
   navigateTo('dashboard');
   toast('Bienvenido, ' + user.nombre, 'success');
 }
@@ -642,7 +643,7 @@ function editProduct(id) {
   openModal();
 }
 
-function saveProduct(id) {
+async function saveProduct(id) {
   var nombre      = trimMax(document.getElementById('prod-nombre').value, VALID.maxLen.nombre);
   var categoria   = document.getElementById('prod-cat').value;
   var unidad      = trimMax(document.getElementById('prod-unidad').value, VALID.maxLen.unidad) || 'unidad';
@@ -665,24 +666,96 @@ function saveProduct(id) {
   if (!imagen) imagen = 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=600&q=80';
 
   var today = new Date().toISOString().split('T')[0];
+
+  const producto = {
+  nombre,
+  categoria_id: categoria,
+  descripcion,
+  precio,
+  moneda,
+  imagen: imagen,
+  stock_disponible: stock,
+  unidad,
+  proveedor_id: null
+};
+
+try {
+
   if (id) {
-    var idx = APP.products.findIndex(function(p){return p.id===id;});
-    if (idx >= 0) APP.products[idx] = Object.assign({}, APP.products[idx], { nombre:nombre, categoria:categoria, unidad:unidad, precio:precio, moneda:moneda, stock:stock, imagen:imagen, proveedor:proveedor, descripcion:descripcion, fechaActualizacion:today });
+
+    const { error } = await supabaseClient
+      .from('productos')
+      .update(producto)
+      .eq('id', id);
+
+    if (error) throw error;
+
+    toast('Producto actualizado', 'success');
+
   } else {
-    APP.products.push({ id:'p'+Date.now(), nombre:nombre, categoria:categoria, descripcion:descripcion, precio:precio, moneda:moneda, imagen:imagen, proveedor:proveedor, stock:stock, unidad:unidad, fechaActualizacion:today });
+
+    const { error } = await supabaseClient
+      .from('productos')
+      .insert([producto]);
+
+    if (error) throw error;
+
+    toast('Producto creado', 'success');
   }
-  saveData('products', APP.products); closeModal(); renderPage(); toast(id?'Producto actualizado':'Producto creado', 'success');
+
+  APP.products = await getProductos();
+
+  closeModal();
+  renderPage();
+
+} catch (error) {
+
+  console.error(error);
+
+  toast(
+    'Error al guardar producto: ' + error.message,
+    'error'
+  );
+}
 }
 
 function deleteProduct(id) {
   document.getElementById('modal-body').innerHTML = '<div class="p-8 text-center"><div class="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style="background:rgba(199,92,92,0.12)"><i class="fas fa-trash text-2xl" style="color:var(--danger)"></i></div><h3 class="text-xl font-bold mb-2">Eliminar Producto</h3><p class="mb-6" style="color:var(--muted)">Se eliminará del catálogo.</p><div class="flex gap-3 justify-center"><button class="btn-danger" onclick="confirmDeleteProduct(\''+id+'\')"><i class="fas fa-trash"></i> Eliminar</button><button class="btn-secondary" onclick="closeModal()">Cancelar</button></div></div>';
   openModal();
 }
-function confirmDeleteProduct(id) {
-  APP.products = APP.products.filter(function(p){return p.id!==id;});
-  // Quita del carrito tanto el producto suelto como sus variantes (parentId).
-  APP.cart = APP.cart.filter(function(c){return c.id!==id && c.parentId!==id;});
-  saveData('products', APP.products); updateCartBadge(); closeModal(); renderPage(); toast('Producto eliminado', 'success');
+
+async function confirmDeleteProduct(id) {
+
+  try {
+
+    const { error } = await supabaseClient
+      .from('productos')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    APP.products = await getProductos();
+
+    APP.cart = APP.cart.filter(function(c){
+      return c.id !== id && c.parentId !== id;
+    });
+
+    updateCartBadge();
+    closeModal();
+    renderPage();
+
+    toast('Producto eliminado', 'success');
+
+  } catch(error) {
+
+    console.error(error);
+
+    toast(
+      'Error al eliminar: ' + error.message,
+      'error'
+    );
+  }
 }
 
 // =====================================================================
@@ -764,7 +837,7 @@ function editVariante(productoId, varianteId, returnTo) {
   setTimeout(function(){ var el = document.getElementById('var-nombre'); if (el) el.focus(); }, 200);
 }
 
-function saveVariante(productoId, varianteId, returnTo) {
+async function saveVariante(productoId, varianteId, returnTo){
   var p = APP.products.find(function(pr){return pr.id===productoId;});
   if (!p) return;
   if (!Array.isArray(p.variantes)) p.variantes = [];
@@ -799,13 +872,57 @@ function saveVariante(productoId, varianteId, returnTo) {
   var upp = uppRaw === '' ? null : parseInt(uppRaw, 10);
   if (upp !== null && (isNaN(upp) || upp < 1 || upp > 9999)) { toast('Unidades por paquete fuera de rango (1 a 9999)', 'error'); return; }
 
+  const variante = {
+  producto_id: productoId,
+  nombre,
+  descripcion,
+  precio,
+  moneda,
+  imagen,
+  stock_disponible: stock,
+  ancho_cm: ancho,
+  largo_cm: largo,
+  unidades_por_paquete: upp
+};
+
+try {
+
   if (varianteId) {
-    var idx = p.variantes.findIndex(function(x){return x.id===varianteId;});
-    if (idx >= 0) p.variantes[idx] = Object.assign({}, p.variantes[idx], { nombre:nombre, descripcion:descripcion, precio:precio, moneda:moneda, stock:stock, imagen:imagen, ancho:ancho, largo:largo, unidadesPorPaquete:upp });
+
+    const { error } = await supabaseClient
+      .from('producto_variantes')
+      .update(variante)
+      .eq('id', varianteId);
+
+    if (error) throw error;
+
+    toast('Variante actualizada', 'success');
+
   } else {
-    p.variantes.push({ id:'v'+Date.now(), nombre:nombre, descripcion:descripcion, precio:precio, moneda:moneda, stock:stock, imagen:imagen, ancho:ancho, largo:largo, unidadesPorPaquete:upp });
+
+    const { error } = await supabaseClient
+      .from('producto_variantes')
+      .insert([variante]);
+
+    if (error) throw error;
+
+    toast('Variante creada', 'success');
   }
-  saveData('products', APP.products);
+
+  APP.products = await getProductos();
+
+} catch(error) {
+
+  console.error(error);
+
+  toast(
+    'Error al guardar variante: ' +
+    error.message,
+    'error'
+  );
+
+  return;
+}
   toast(varianteId ? 'Variante actualizada' : 'Variante creada', 'success');
   if (returnTo === 'editProduct') editProduct(productoId);
   else editVariantes(productoId);
@@ -821,17 +938,53 @@ function deleteVariante(productoId, varianteId, returnTo) {
   openModal();
 }
 
-function confirmDeleteVariante(productoId, varianteId, returnTo) {
-  var p = APP.products.find(function(pr){return pr.id===productoId;});
-  if (!p || !p.variantes) return;
-  p.variantes = p.variantes.filter(function(x){return x.id!==varianteId;});
-  APP.cart = APP.cart.filter(function(c){return !(c.parentId===productoId && c.id===varianteId);});
-  saveData('products', APP.products); updateCartBadge();
-  toast('Variante eliminada', 'success');
-  if (returnTo === 'editProduct') editProduct(productoId);
-  else editVariantes(productoId);
-}
+async function confirmDeleteVariante(
+  productoId,
+  varianteId,
+  returnTo
+) {
 
+  try {
+
+    const { error } = await supabaseClient
+      .from('producto_variantes')
+      .delete()
+      .eq('id', varianteId);
+
+    if (error) throw error;
+
+    APP.products = await getProductos();
+
+    APP.cart = APP.cart.filter(function(c){
+      return !(
+        c.parentId === productoId &&
+        c.id === varianteId
+      );
+    });
+
+    updateCartBadge();
+
+    toast(
+      'Variante eliminada',
+      'success'
+    );
+
+    if (returnTo === 'editProduct')
+      editProduct(productoId);
+    else
+      editVariantes(productoId);
+
+  } catch(error) {
+
+    console.error(error);
+
+    toast(
+      'Error al eliminar variante: ' +
+      error.message,
+      'error'
+    );
+  }
+}
 // =====================================================================
 // RECURSOS TÉCNICOS — enlaces de Drive a documentación técnica
 // (Suplemento Técnico de Costos, Precios Oficiales CAP, etc.).
@@ -2231,10 +2384,10 @@ function saveSettings() {
   toast('Configuración guardada', 'success');
 }
 
-function resetProducts() {
-  APP.products = JSON.parse(JSON.stringify(DEFAULT_PRODUCTS)).map(normalizarProducto);
-  saveData('products', APP.products); renderPage(); toast('Productos restaurados', 'success');
-}
+// function resetProducts() {
+//   APP.products = JSON.parse(JSON.stringify(DEFAULT_PRODUCTS)).map(normalizarProducto);
+//   saveData('products', APP.products); renderPage(); toast('Productos restaurados', 'success');
+// }
 
 // Confirmación genérica para acciones destructivas específicas.
 // El parámetro `accion` decide qué se borra. NINGUNA borra cotizaciones por accidente.
@@ -2256,12 +2409,32 @@ function confirmAccion(accion) {
   openModal();
 }
 
-function ejecutarAccion(accion) {
+async function ejecutarAccion(accion) {
   if (accion === 'productos') {
+
+  try {
+
+    const { error } = await supabaseClient
+      .from('productos')
+      .delete()
+      .neq('id', '');
+
+    if (error) throw error;
+
     APP.products = [];
-    saveData('products', APP.products);
+
     toast('Catálogo vaciado', 'success');
-  } else if (accion === 'cotizaciones') {
+
+  } catch(error) {
+
+    console.error(error);
+
+    toast(
+      'Error al vaciar catálogo',
+      'error'
+    );
+  }
+} else if (accion === 'cotizaciones') {
     APP.quotes = [];
     APP.quoteCounter = 0;
     saveData('quotes', APP.quotes);

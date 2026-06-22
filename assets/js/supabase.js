@@ -10,3 +10,14 @@ const supabaseClient = supabase.createClient(
 );
 
 console.log("Supabase conectado");
+
+async function testProductos() {
+  const { data, error } = await supabaseClient
+    .from('productos')
+    .select('*');
+
+  console.log('DATA:', data);
+  console.log('ERROR:', error);
+}
+
+testProductos();
