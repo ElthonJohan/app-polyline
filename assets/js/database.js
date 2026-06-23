@@ -14,6 +14,11 @@ async function getProductos() {
 
   return data.map(function(producto) {
 
+    console.log(
+    producto.nombre,
+    producto.stock_disponible
+  );
+
     producto.variantes =
       producto.producto_variantes || [];
 

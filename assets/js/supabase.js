@@ -24,20 +24,33 @@ console.log("Supabase conectado");
 
 async function login(email, password) {
 
-  const { data, error } = await supabaseClient
-    .from('usuarios')
-    .select('*')
-    .eq('email', email)
-    .eq('password', password)
-    .eq('activo', true)
-    .single();
+  const { data: authData, error: authError } =
+    await supabaseClient.auth.signInWithPassword({
+      email,
+      password
+    });
+
+  if (authError) {
+    console.error(authError);
+    return null;
+  }
+
+  const { data: usuario, error } =
+    await supabaseClient
+      .from('usuarios')
+      .select('*')
+      .eq('id', authData.user.id)
+      .single();
 
   if (error) {
     console.error(error);
     return null;
   }
 
-  return data;
+  console.log(authData);
+console.log(usuario);
+
+  return usuario;
 }
 
 async function getEmpresaConfig() {
