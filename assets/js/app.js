@@ -897,7 +897,9 @@ function renderDashboard() {
 /* ---------- CATÁLOGO ---------- */
 function renderCatalog() {
   var filtered = APP.products.filter(function (p) {
-    var matchCat = APP.activeCat === "all" || p.categoria === APP.activeCat;
+    var matchCat =
+  APP.activeCat === "all" ||
+  p.categoria_id === APP.activeCat;
     var s = APP.search.toLowerCase();
     var matchSearch =
       !s ||
@@ -929,8 +931,8 @@ function renderCatalog() {
   if (filtered.length) {
     filtered.forEach(function (p, i) {
       var cat = CATEGORIAS.find(function (c) {
-        return c.id === p.categoria;
-      });
+  return c.id === p.categoria_id;
+});
       var inCart = APP.cart.find(function (c) {
         return c.id === p.id;
       });
@@ -971,7 +973,7 @@ function renderCatalog() {
         encodeURIComponent(p.id) +
         "/600/400'\">" +
         '<span class="cat-badge">' +
-        esc(cat ? cat.nombre : p.categoria) +
+        esc(cat ? cat.nombre : p.categoria_id) +
         "</span>" +
         (!disponible
           ? '<span class="absolute top-12 right-12 px-2 py-1 rounded-md text-xs font-semibold" style="background:rgba(199,92,92,0.2);color:var(--danger)">Agotado</span>'
@@ -1453,7 +1455,7 @@ function renderAdmin() {
   var rows = APP.products
     .map(function (p) {
       var cat = CATEGORIAS.find(function (c) {
-        return c.id === p.categoria;
+        return c.id === p.categoria_id;
       });
       var nVar = (p.variantes || []).length;
       // El precio vive en cada variante. Aquí solo mostramos cuántas hay.
@@ -1478,7 +1480,7 @@ function renderAdmin() {
         '</span></div></td><td class="text-xs" style="color:' +
         (cat ? cat.color : "var(--muted)") +
         '">' +
-        esc(cat ? cat.nombre : p.categoria) +
+        (cat ? cat.nombre : p.categoria_id) +
         "</td><td>" +
         varCol +
         '</td><td><span class="px-2 py-1 rounded-md text-xs font-semibold" style="background:' +
@@ -1497,6 +1499,14 @@ function renderAdmin() {
       );
     })
     .join("");
+
+    APP.products.forEach(function(p){
+  console.log(
+    p.nombre,
+    p.categoria,
+    p.categoria_id
+  );
+});
   return (
     '<div class="max-w-7xl mx-auto"><div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6"><div><h1 class="text-2xl font-bold">Administrar Productos</h1><p class="text-sm mt-1" style="color:var(--muted)">' +
     APP.products.length +
