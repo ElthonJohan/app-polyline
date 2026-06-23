@@ -47,12 +47,13 @@ function trimMax(s, max) {
   return s.length > max ? s.substring(0, max) : s;
 }
 
-// Estado global
-const APP = {
-  user: null, page: 'dashboard', cart: [], products: [], quotes: [],
-  search: '', activeCat: 'all', presentationMode: false,
-  tourActive: false, tourStep: 0, quoteCounter: 0
-};
+  // Estado global
+  const APP = {
+    user: null, page: 'dashboard', cart: [], products: [],  proveedores: [], quotes: [],
+    config: null,
+    search: '', activeCat: 'all', presentationMode: false,
+    tourActive: false, tourStep: 0, quoteCounter: 0
+  };
 
 // Monedas soportadas. Coinciden con el ENUM `moneda` en Supabase.
 const MONEDAS = {
@@ -78,8 +79,15 @@ function convertirPrecio(precio, monedaOrigen, monedaDestino, tipoCambio) {
 
 // Tipo de cambio actual desde configuración (PEN por USD).
 function tipoCambioActual() {
-  var tc = parseFloat(loadData('cfg_tipo_cambio', '3.75'));
-  return isNaN(tc) || tc <= 0 ? 3.75 : tc;
+
+  var tc =
+    APP.config?.tipo_cambio_default;
+
+  tc = parseFloat(tc);
+
+  return isNaN(tc) || tc <= 0
+    ? 3.75
+    : tc;
 }
 
 // Migra productos antiguos (sin campo moneda o variantes) al nuevo schema.
@@ -241,8 +249,11 @@ function loadData(key, fallback) {
 }
 async function initAppData() {
   APP.products = await getProductos();
-  APP.quotes = loadData('quotes', []).map(normalizarCotizacion);
-  APP.quoteCounter = loadData('quoteCounter', 0);
+    APP.proveedores = await getProveedores();
+  APP.quotes = await getCotizaciones();
+APP.config = await getEmpresaConfig();
+
+  APP.quoteCounter = APP.quotes.length;
 }
 
 // Autenticación
@@ -250,7 +261,10 @@ async function handleLogin() {
   var email = document.getElementById('login-email').value.trim();
   var pass = document.getElementById('login-password').value;
   var users = loadData('users', DEFAULT_USERS);
-  var user = users.find(function(u) { return u.email === email && u.password === pass; });
+   var user = users.find(function(u) {
+    return u.email === email &&
+           u.password === pass;
+  });
   if (!user) { toast('Credenciales incorrectas', 'error'); return; }
   APP.user = user;
   document.getElementById('login-screen').style.display = 'none';
@@ -569,9 +583,47 @@ function deleteQuote(id) {
   document.getElementById('modal-body').innerHTML = '<div class="p-8 text-center"><div class="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style="background:rgba(199,92,92,0.12)"><i class="fas fa-trash text-2xl" style="color:var(--danger)"></i></div><h3 class="text-xl font-bold mb-2">Eliminar Cotización</h3><p class="mb-6" style="color:var(--muted)">Esta acción no se puede deshacer.</p><div class="flex gap-3 justify-center"><button class="btn-danger" onclick="confirmDeleteQuote(\''+id+'\')"><i class="fas fa-trash"></i> Eliminar</button><button class="btn-secondary" onclick="closeModal()">Cancelar</button></div></div>';
   openModal();
 }
-function confirmDeleteQuote(id) {
-  APP.quotes = APP.quotes.filter(function(q){return q.id!==id;});
-  saveData('quotes', APP.quotes); closeModal(); renderPage(); toast('Cotización eliminada', 'success');
+async function confirmDeleteQuote(id) {
+
+  try {
+
+    // Primero elimina los items
+    const { error: itemsError } = await supabaseClient
+      .from('cotizacion_items')
+      .delete()
+      .eq('cotizacion_id', id);
+
+    if (itemsError) throw itemsError;
+
+    // Luego elimina la cotización
+    const { error } = await supabaseClient
+      .from('cotizaciones')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    APP.quotes = await getCotizaciones();
+
+    closeModal();
+
+    renderPage();
+
+    toast(
+      'Cotización eliminada',
+      'success'
+    );
+
+  } catch(error) {
+
+    console.error(error);
+
+    toast(
+      'Error al eliminar cotización: ' +
+      error.message,
+      'error'
+    );
+  }
 }
 
 // Admin
@@ -806,6 +858,7 @@ function editVariante(productoId, varianteId, returnTo) {
   if (!p) return;
   var ret = returnTo === 'editProduct' ? 'editProduct' : 'editVariantes';
   var v = varianteId ? (p.variantes || []).find(function(x){return x.id===varianteId;}) : null;
+  console.log(v);
   var isEdit = !!v;
   document.getElementById('modal-body').innerHTML =
     '<div class="p-6 md:p-8">' +
@@ -817,14 +870,16 @@ function editVariante(productoId, varianteId, returnTo) {
         '<div class="grid grid-cols-3 gap-4">' +
           '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Precio</label><input type="number" id="var-precio" class="input-field" step="0.01" min="0" max="9999999" value="'+(v?Number(v.precio):'')+'"></div>' +
           '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Moneda</label><select id="var-moneda" class="input-field"><option value="PEN" '+(!v||v.moneda!=='USD'?'selected':'')+'>S/. Soles</option><option value="USD" '+(v&&v.moneda==='USD'?'selected':'')+'>US$ Dólares</option></select></div>' +
-          '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Stock</label><select id="var-stock" class="input-field"><option value="true" '+(!v||v.stock?'selected':'')+'>Disponible</option><option value="false" '+(v&&!v.stock?'selected':'')+'>Agotado</option></select></div>' +
+          '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Stock</label><select id="var-stock" class="input-field"><option value="true" '+(!v||v.stock_disponible?'selected':'')+'>Disponible</option><option value="false" '+(v&&!v.stock_disponible?'selected':'')+'>Agotado</option></select></div>' +
         '</div>' +
         '<div class="grid grid-cols-2 gap-4">' +
-          '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Ancho de pieza (cm)</label><input type="number" id="var-ancho" class="input-field" step="0.1" min="0" max="9999" value="'+(v&&v.ancho?Number(v.ancho):'')+'" placeholder="ej. 60"></div>' +
-          '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Largo de pieza (cm)</label><input type="number" id="var-largo" class="input-field" step="0.1" min="0" max="9999" value="'+(v&&v.largo?Number(v.largo):'')+'" placeholder="ej. 60"></div>' +
+          '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Ancho de pieza (cm)</label><input type="number" id="var-ancho" class="input-field" step="0.1" min="0" max="9999" value="'+(v&&v.ancho_cm?Number(v.ancho_cm):'')+'" placeholder="ej. 60"></div>' +
+          '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Largo de pieza (cm)</label><input type="number" id="var-largo" class="input-field" step="0.1" min="0" max="9999" value="'+(v&&v.largo_cm?Number(v.largo_cm):'')+'" placeholder="ej. 60"></div>' +
         '</div>' +
         '<p class="text-xs" style="color:var(--muted)"><i class="fas fa-info-circle mr-1"></i>Dimensiones opcionales. Si las llenas, la calculadora podrá usar esta variante para estimar cobertura de superficies.</p>' +
-        '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Unidades por paquete (opcional)</label><input type="number" id="var-upp" class="input-field" step="1" min="1" max="9999" value="'+(v&&v.unidadesPorPaquete?Number(v.unidadesPorPaquete):'')+'" placeholder="ej. 10 unidades por caja"></div>' +
+        '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Unidades por paquete (opcional)</label><input type="number" id="var-upp" class="input-field" step="1" min="1" max="9999" value="'+(v&&v.unidades_por_paquete
+ ? Number(v.unidades_por_paquete)
+ : '')+'" placeholder="ej. 10 unidades por caja"></div>' +
         '<p class="text-xs" style="color:var(--muted)"><i class="fas fa-box mr-1"></i>Cuántas piezas trae cada paquete/caja. La calculadora mostrará cuántas cajas comprar.</p>' +
         '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">URL de Imagen (opcional, usa la del producto si se deja vacío)</label><input type="url" id="var-imagen" class="input-field" maxlength="2000" placeholder="https://..." value="'+esc(v?v.imagen||'':'')+'"></div>' +
       '</div>' +
@@ -888,6 +943,11 @@ async function saveVariante(productoId, varianteId, returnTo){
 try {
 
   if (varianteId) {
+
+    console.log(
+  'EDITANDO VARIANTE:',
+  varianteId
+);
 
     const { error } = await supabaseClient
       .from('producto_variantes')
@@ -1250,7 +1310,7 @@ function telefonoAWhatsapp(tel) {
 }
 
 function renderProveedores() {
-  var agenda = loadData('proveedoresAgenda', []);
+  var agenda = APP.proveedores || [];
   var html = '<div class="max-w-5xl mx-auto">' +
     '<div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">' +
       '<div><h1 class="text-2xl font-bold">Agenda de Proveedores</h1><p class="text-sm mt-1" style="color:var(--muted)">Contactos por rubro con enlace directo a WhatsApp. '+agenda.length+' contacto(s) registrado(s).</p></div>' +
@@ -1294,7 +1354,7 @@ function renderProveedores() {
 }
 
 function editProveedorContacto(id) {
-  var agenda = loadData('proveedoresAgenda', []);
+  var agenda = APP.proveedores || [];
   var p = id ? agenda.find(function(x){return x.id===id;}) : null;
   var isEdit = !!p;
   var catOptions = PROV_CATEGORIAS.map(function(c){
@@ -1319,7 +1379,8 @@ function editProveedorContacto(id) {
   openModal();
 }
 
-function saveProveedorContacto(id) {
+async function saveProveedorContacto(id) {
+
   var nombre   = trimMax(document.getElementById('prov-nombre').value, 200);
   var cat      = document.getElementById('prov-cat').value;
   var contacto = trimMax(document.getElementById('prov-contacto').value, 200);
@@ -1327,24 +1388,85 @@ function saveProveedorContacto(id) {
   var email    = trimMax(document.getElementById('prov-email').value, 254);
   var notas    = trimMax(document.getElementById('prov-notas').value, 1000);
 
-  if (!nombre) { toast('El nombre es obligatorio', 'error'); return; }
-  if (!PROV_CATEGORIAS.some(function(c){return c.id===cat;})) { toast('Rubro inválido', 'error'); return; }
-  if (email && !VALID.email.test(email)) { toast('Correo con formato inválido', 'error'); return; }
-  if (tel && !/^[\d\s\-\+\(\)]{6,30}$/.test(tel)) { toast('Teléfono inválido', 'error'); return; }
-
-  var agenda = loadData('proveedoresAgenda', []);
-  if (id) {
-    var idx = agenda.findIndex(function(x){return x.id===id;});
-    if (idx >= 0) agenda[idx] = Object.assign({}, agenda[idx], { nombre:nombre, categoria:cat, contacto:contacto, telefono:tel, email:email, notas:notas });
-  } else {
-    agenda.push({ id:'prov'+Date.now(), nombre:nombre, categoria:cat, contacto:contacto, telefono:tel, email:email, notas:notas, createdAt:new Date().toISOString() });
+  if (!nombre) {
+    toast('El nombre es obligatorio', 'error');
+    return;
   }
-  if (!saveData('proveedoresAgenda', agenda)) return;
-  closeModal(); renderPage(); toast(id?'Contacto actualizado':'Contacto agregado', 'success');
+
+  if (!PROV_CATEGORIAS.some(function(c){
+    return c.id === cat;
+  })) {
+    toast('Rubro inválido', 'error');
+    return;
+  }
+
+  if (email && !VALID.email.test(email)) {
+    toast('Correo con formato inválido', 'error');
+    return;
+  }
+
+  if (tel && !/^[\d\s\-\+\(\)]{6,30}$/.test(tel)) {
+    toast('Teléfono inválido', 'error');
+    return;
+  }
+
+  const proveedor = {
+    nombre,
+    categoria: cat,
+    contacto,
+    telefono: tel,
+    email,
+    notas,
+    activo: true
+  };
+
+  try {
+
+    if (id) {
+
+      await updateProveedor(
+        id,
+        proveedor
+      );
+
+      toast(
+        'Contacto actualizado',
+        'success'
+      );
+
+    } else {
+
+      await createProveedor(
+        proveedor
+      );
+
+      toast(
+        'Contacto agregado',
+        'success'
+      );
+    }
+
+    APP.proveedores =
+      await getProveedores();
+
+    closeModal();
+
+    renderPage();
+
+  } catch(error) {
+
+    console.error(error);
+
+    toast(
+      'Error al guardar proveedor: ' +
+      error.message,
+      'error'
+    );
+  }
 }
 
 function deleteProveedorContacto(id) {
-  var agenda = loadData('proveedoresAgenda', []);
+  var agenda = APP.proveedores || [];
   var p = agenda.find(function(x){return x.id===id;});
   if (!p) return;
   document.getElementById('modal-body').innerHTML =
@@ -1356,11 +1478,39 @@ function deleteProveedorContacto(id) {
     '</div>';
   openModal();
 }
+async function confirmDeleteProveedorContacto(id) {
 
-function confirmDeleteProveedorContacto(id) {
-  var agenda = loadData('proveedoresAgenda', []).filter(function(x){return x.id!==id;});
-  if (!saveData('proveedoresAgenda', agenda)) return;
-  closeModal(); renderPage(); toast('Contacto eliminado', 'success');
+  try {
+
+    await updateProveedor(
+      id,
+      {
+        activo: false
+      }
+    );
+
+    APP.proveedores =
+      await getProveedores();
+
+    closeModal();
+
+    renderPage();
+
+    toast(
+      'Contacto eliminado',
+      'success'
+    );
+
+  } catch(error) {
+
+    console.error(error);
+
+    toast(
+      'Error al eliminar proveedor: ' +
+      error.message,
+      'error'
+    );
+  }
 }
 
 
@@ -1753,7 +1903,9 @@ function renderSuperficieCard(s, total) {
 }
 
 function renderCalculadora() {
-  var monedaDefault = loadData('cfg_moneda_default', 'PEN');
+  var monedaDefault =
+  APP.config?.moneda_default ||
+  'PEN';
   if (!CALC.moneda) CALC.moneda = monedaDefault;
   var variantes = todasVariantes();
   var plantillas = loadData('calc_plantillas', []);
@@ -2318,16 +2470,21 @@ function limpiarCalculadora() {
 
 // Configuración y gestión de datos de la empresa
 function renderSettings() {
-  var tcGuardado = loadData('cfg_tipo_cambio', '3.75');
-  var monedaDefault = loadData('cfg_moneda_default', 'PEN');
+  var config = APP.config || {};
+
+var tcGuardado =
+  config.tipo_cambio_default || 3.75;
+
+var monedaDefault =
+  config.moneda_default || 'PEN';
   return '<div class="max-w-2xl mx-auto"><h1 class="text-2xl font-bold mb-6">Configuración</h1><div class="space-y-6">' +
     // --- Datos de empresa ---
     '<div class="p-6 rounded-2xl" style="background:var(--card);border:1px solid var(--border)"><h3 class="text-lg font-bold mb-4"><i class="fas fa-building mr-2" style="color:var(--accent)"></i>Datos de la Empresa</h3><div class="space-y-4">' +
-      '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Nombre</label><input type="text" id="cfg-empresa" class="input-field" maxlength="200" value="'+esc(loadData('cfg_empresa','Polyline SAC'))+'"></div>' +
-      '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Encargado</label><input type="text" id="cfg-encargado" class="input-field" maxlength="200" value="'+esc(loadData('cfg_encargado','Arq. Luis Alberto Salas Castro'))+'"></div>' +
-      '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Teléfono</label><input type="tel" id="cfg-tel" class="input-field" maxlength="30" value="'+esc(loadData('cfg_tel','+51 943 812 536'))+'"></div>' +
-      '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Correo</label><input type="email" id="cfg-email" class="input-field" maxlength="254" value="'+esc(loadData('cfg_email','polylinesac@yahoo.com'))+'"></div>' +
-      '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Dirección</label><textarea id="cfg-dir" class="input-field" rows="2" maxlength="300">'+esc(loadData('cfg_dir','Av. Benavides 3008. Lima\nArq. Luis Alberto Salas Castro'))+'</textarea></div>' +
+      '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Nombre</label><input type="text" id="cfg-empresa" class="input-field" maxlength="200" value="'+esc(APP.config?.nombre || 'Polyline SAC')+'"></div>' +
+      '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Encargado</label><input type="text" id="cfg-encargado" class="input-field" maxlength="200" value="'+esc(APP.config?.encargado || 'Arq. Luis Alberto Salas Castro')+'"></div>' +
+      '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Teléfono</label><input type="tel" id="cfg-tel" class="input-field" maxlength="30" value="'+esc(APP.config?.telefono || '+51 943 812 536')+'"></div>' +
+      '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Correo</label><input type="email" id="cfg-email" class="input-field" maxlength="254" value="'+esc(APP.config?.email || 'polylinesac@yahoo.com')+'"></div>' +
+      '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Dirección</label><textarea id="cfg-dir" class="input-field" rows="2" maxlength="300">'+esc(APP.config?.direccion || 'Av. Benavides 3008. Lima\nArq. Luis Alberto Salas Castro')+'</textarea></div>' +
     '</div><button class="btn-primary mt-4" onclick="saveSettings()"><i class="fas fa-save"></i> Guardar</button></div>' +
 
     // --- Moneda y TC ---
@@ -2337,7 +2494,7 @@ function renderSettings() {
     '</div><p class="text-xs mt-3" style="color:var(--muted)">El TC se aplica al convertir entre monedas. Cada cotización guarda el TC del momento, así que cambiarlo no afecta cotizaciones ya emitidas.</p><button class="btn-primary mt-4" onclick="saveSettings()"><i class="fas fa-save"></i> Guardar</button></div>' +
 
     // --- Condiciones PDF ---
-    '<div class="p-6 rounded-2xl" style="background:var(--card);border:1px solid var(--border)"><h3 class="text-lg font-bold mb-4"><i class="fas fa-file-lines mr-2" style="color:var(--accent)"></i>Condiciones en Cotización</h3><textarea id="cfg-condiciones" class="input-field" rows="4" maxlength="2000" placeholder="Ej: Precios vigentes al momento de la cotización...">'+esc(loadData('cfg_condiciones','Precios vigentes a la fecha de emisión. Validez de 15 días hábiles. Incluye IGV del 18%. Sujeto a disponibilidad de stock.'))+'</textarea><button class="btn-primary mt-4" onclick="saveSettings()"><i class="fas fa-save"></i> Guardar</button></div>' +
+    '<div class="p-6 rounded-2xl" style="background:var(--card);border:1px solid var(--border)"><h3 class="text-lg font-bold mb-4"><i class="fas fa-file-lines mr-2" style="color:var(--accent)"></i>Condiciones en Cotización</h3><textarea id="cfg-condiciones" class="input-field" rows="4" maxlength="2000" placeholder="Ej: Precios vigentes al momento de la cotización...">'+esc(APP.config?.condiciones||'Precios vigentes a la fecha de emisión. Validez de 15 días hábiles. Incluye IGV del 18%. Sujeto a disponibilidad de stock.')+'</textarea><button class="btn-primary mt-4" onclick="saveSettings()"><i class="fas fa-save"></i> Guardar</button></div>' +
 
     // --- Gestión granular de datos ---
     '<div class="p-6 rounded-2xl" style="background:var(--card);border:1px solid var(--border)"><h3 class="text-lg font-bold mb-4"><i class="fas fa-database mr-2" style="color:var(--accent)"></i>Gestión de Datos</h3>' +
@@ -2357,33 +2514,123 @@ function renderSettings() {
     '</div>' +
   '</div></div>';
 }
+async function saveSettings() {
 
-function saveSettings() {
   var emailEl = document.getElementById('cfg-email');
+
   if (emailEl) {
     var em = emailEl.value.trim();
-    if (em && !VALID.email.test(em)) { toast('Correo con formato inválido', 'error'); return; }
-  }
-  var tcEl = document.getElementById('cfg-tc');
-  var tcInput = null;
-  if (tcEl) {
-    tcInput = parseFloat(tcEl.value);
-    if (isNaN(tcInput) || tcInput <= 0 || tcInput > 1000) { toast('Tipo de cambio fuera de rango (0 a 1000)', 'error'); return; }
-  }
-  var monedaEl = document.getElementById('cfg-moneda');
-  if (monedaEl && monedaEl.value !== 'PEN' && monedaEl.value !== 'USD') { toast('Moneda inválida', 'error'); return; }
 
-  if (document.getElementById('cfg-empresa'))     saveData('cfg_empresa',     trimMax(document.getElementById('cfg-empresa').value, VALID.maxLen.nombre));
-  if (document.getElementById('cfg-encargado'))   saveData('cfg_encargado',   trimMax(document.getElementById('cfg-encargado').value, VALID.maxLen.nombre));
-  if (document.getElementById('cfg-tel'))         saveData('cfg_tel',         trimMax(document.getElementById('cfg-tel').value, VALID.maxLen.telefono));
-  if (emailEl)                                    saveData('cfg_email',       trimMax(emailEl.value, VALID.maxLen.email));
-  if (document.getElementById('cfg-dir'))         saveData('cfg_dir',         trimMax(document.getElementById('cfg-dir').value, VALID.maxLen.direccion));
-  if (document.getElementById('cfg-condiciones')) saveData('cfg_condiciones', trimMax(document.getElementById('cfg-condiciones').value, VALID.maxLen.condiciones));
-  if (monedaEl)                                   saveData('cfg_moneda_default', monedaEl.value);
-  if (tcInput !== null)                           saveData('cfg_tipo_cambio', tcInput.toFixed(4));
-  toast('Configuración guardada', 'success');
+    if (em && !VALID.email.test(em)) {
+      toast('Correo con formato inválido', 'error');
+      return;
+    }
+  }
+
+  var tcEl = document.getElementById('cfg-tc');
+
+  var tcInput = null;
+
+  if (tcEl) {
+
+    tcInput = parseFloat(tcEl.value);
+
+    if (
+      isNaN(tcInput) ||
+      tcInput <= 0 ||
+      tcInput > 1000
+    ) {
+      toast(
+        'Tipo de cambio fuera de rango',
+        'error'
+      );
+      return;
+    }
+  }
+
+  const moneda = document.getElementById('cfg-moneda').value;
+
+if (
+  moneda !== 'PEN' &&
+  moneda !== 'USD'
+) {
+  toast(
+    'Moneda inválida',
+    'error'
+  );
+  return;
 }
 
+
+  try {
+
+    const config = {
+
+      nombre:
+        trimMax(
+          document.getElementById('cfg-empresa').value,
+          VALID.maxLen.nombre
+        ),
+
+      encargado:
+        trimMax(
+          document.getElementById('cfg-encargado').value,
+          VALID.maxLen.nombre
+        ),
+
+      telefono:
+        trimMax(
+          document.getElementById('cfg-tel').value,
+          VALID.maxLen.telefono
+        ),
+
+      email:
+        trimMax(
+          document.getElementById('cfg-email').value,
+          VALID.maxLen.email
+        ),
+
+      direccion:
+        trimMax(
+          document.getElementById('cfg-dir').value,
+          VALID.maxLen.direccion
+        ),
+
+      condiciones:
+        trimMax(
+          document.getElementById('cfg-condiciones').value,
+          VALID.maxLen.condiciones
+        ),
+
+      moneda_default:
+        moneda,
+
+      tipo_cambio_default:
+        tcInput
+    };
+
+    await updateEmpresaConfig(config);
+
+    APP.config =
+      await getEmpresaConfig();
+
+      renderPage();
+
+    toast(
+      'Configuración guardada',
+      'success'
+    );
+
+  } catch(error) {
+
+    console.error(error);
+
+    toast(
+      'Error al guardar configuración',
+      'error'
+    );
+  }
+}
 // function resetProducts() {
 //   APP.products = JSON.parse(JSON.stringify(DEFAULT_PRODUCTS)).map(normalizarProducto);
 //   saveData('products', APP.products); renderPage(); toast('Productos restaurados', 'success');
@@ -2434,18 +2681,91 @@ async function ejecutarAccion(accion) {
       'error'
     );
   }
-} else if (accion === 'cotizaciones') {
+}  else if (accion === 'cotizaciones') {
+
+  try {
+
+    // Eliminar primero los detalles
+    const { error: itemsError } = await supabaseClient
+      .from('cotizacion_items')
+      .delete()
+      .neq('id', '');
+
+    if (itemsError) throw itemsError;
+
+    // Luego las cabeceras
+    const { error } = await supabaseClient
+      .from('cotizaciones')
+      .delete()
+      .neq('id', '');
+
+    if (error) throw error;
+
     APP.quotes = [];
     APP.quoteCounter = 0;
-    saveData('quotes', APP.quotes);
-    saveData('quoteCounter', 0);
-    toast('Historial de cotizaciones eliminado', 'success');
-  } else if (accion === 'config') {
-    ['cfg_empresa','cfg_encargado','cfg_tel','cfg_email','cfg_dir','cfg_condiciones','cfg_moneda_default','cfg_tipo_cambio']
-      .forEach(function(k){ localStorage.removeItem('acabados_'+k); });
-    toast('Configuración restablecida', 'success');
-  } else if (accion === 'tc') {
-    saveData('cfg_tipo_cambio', '3.7500');
+
+    toast(
+      'Historial de cotizaciones eliminado',
+      'success'
+    );
+
+  } catch(error) {
+
+    console.error(error);
+
+    toast(
+      'Error al eliminar cotizaciones',
+      'error'
+    );
+  }
+} else if (accion === 'config') {
+
+  try {
+
+    await updateEmpresaConfig({
+
+      nombre: 'Polyline SAC',
+
+      encargado: '',
+
+      telefono: '',
+
+      email: '',
+
+      direccion: '',
+
+      condiciones:
+        'Precios vigentes a la fecha de emisión.',
+
+      moneda_default: 'PEN',
+
+      tipo_cambio_default: 3.75
+    });
+
+    APP.config =
+      await getEmpresaConfig();
+
+    toast(
+      'Configuración restablecida',
+      'success'
+    );
+
+  } catch(error) {
+
+    console.error(error);
+
+    toast(
+      'Error al restablecer configuración',
+      'error'
+    );
+  }
+} else if (accion === 'tc') {
+    await updateEmpresaConfig({
+  tipo_cambio_default: 3.75
+});
+
+APP.config =
+  await getEmpresaConfig();
     toast('Tipo de cambio reseteado a 3.7500', 'success');
   }
   updateCartBadge(); closeModal(); renderPage();
@@ -2529,7 +2849,9 @@ function clearCart() { APP.cart=[]; updateCartBadge(); renderCartPanel(); if(APP
 function showQuoteForm() {
   closeCart();
   var tc = tipoCambioActual();
-  var monedaDefault = loadData('cfg_moneda_default', 'PEN');
+  var monedaDefault =
+  APP.config?.moneda_default ||
+  'PEN';
   document.getElementById('modal-body').innerHTML =
     '<div class="p-6 md:p-8"><h2 class="text-xl font-bold mb-6">Completar Cotización</h2><div class="space-y-4">' +
     '<div><label class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color:var(--muted)">Nombre del Cliente</label><input type="text" id="quote-cliente" class="input-field" placeholder="Nombre completo o razón social"></div>' +
@@ -2568,7 +2890,7 @@ function actualizarPreviewCotizacion() {
     '<div class="flex justify-between font-bold pt-1 mt-1" style="border-top:1px solid var(--border)"><span>Total</span><span style="color:var(--accent)">'+formatMoney(total, monedaSalida)+'</span></div>';
 }
 
-function createQuote() {
+async function createQuote() {
   if (!APP.cart.length) { toast('Carrito vacío', 'error'); return; }
   var cliente = trimMax(document.getElementById('quote-cliente').value, VALID.maxLen.cliente);
   if (!cliente) { toast('Ingresa el nombre del cliente', 'error'); return; }
@@ -2606,6 +2928,12 @@ function createQuote() {
       subtotal: sub
     };
   });
+
+  const clienteDb =
+  await getOrCreateCliente(
+    cliente,
+    ruc
+  );
   var quote = {
     id:'q'+Date.now(), numero:APP.quoteCounter,
     cliente:cliente, ruc:ruc, proyecto:proyecto, notas:notas, fecha:fecha,
@@ -2613,8 +2941,121 @@ function createQuote() {
     moneda: monedaSalida, tipoCambio: tc,
     createdAt:now.toISOString()
   };
-  APP.quotes.push(quote);
-  saveData('quotes', APP.quotes); saveData('quoteCounter', APP.quoteCounter);
+  try {
+
+  const subtotal =
+    total / 1.18;
+
+  const igv =
+    total - subtotal;
+
+  const { data: cotizacion, error } =
+    await supabaseClient
+      .from('cotizaciones')
+      .insert([{
+
+        numero: quote.numero,
+
+        cliente_id:
+          clienteDb.id,
+
+        cliente_nombre:
+          cliente,
+
+        proyecto:
+          proyecto,
+
+        notas:
+          notas,
+
+        moneda_salida:
+          monedaSalida,
+
+        tipo_cambio_aplicado:
+          tc,
+
+        subtotal:
+          subtotal,
+
+        igv:
+          igv,
+
+        total:
+          total,
+
+        estado:
+          'enviada'
+
+      }])
+      .select()
+      .single();
+
+  if (error) throw error;
+
+  const itemsDb =
+    items.map(function(item, index){
+
+      return {
+
+        cotizacion_id:
+          cotizacion.id,
+
+        producto_id:
+          item.productoId,
+
+        variante_id:
+          item.varianteId,
+
+        producto_nombre:
+          item.productoNombre,
+
+        producto_unidad:
+          item.productoUnidad,
+
+        cantidad:
+          item.cantidad,
+
+        precio_unitario_origen:
+          item.precioUnitarioOrigen,
+
+        moneda_origen:
+          item.monedaOrigen,
+
+        precio_unitario_salida:
+          item.precioUnitario,
+
+        subtotal:
+          item.subtotal,
+
+        orden:
+          index
+      };
+    });
+
+  const {
+    error: itemsError
+  } = await supabaseClient
+      .from('cotizacion_items')
+      .insert(itemsDb);
+
+  if (itemsError)
+    throw itemsError;
+
+  APP.quotes =
+    await getCotizaciones();
+
+} catch(error) {
+
+  console.error(error);
+
+  toast(
+    'Error al guardar cotización: ' +
+    error.message,
+    'error'
+  );
+
+  return;
+}
   APP.cart = []; updateCartBadge(); closeModal();
   generatePDF(quote.id);
   var cotNum = String(quote.numero).padStart(4,'0');
@@ -2627,7 +3068,9 @@ function createQuote() {
 function shareQuote(id) {
   var q = APP.quotes.find(function(qu){return qu.id===id;});
   if (!q) return;
-  var empresa = loadData('cfg_empresa','Polyline SAC');
+  var empresa =
+  APP.config?.nombre ||
+  'Polyline SAC';
   var subject = encodeURIComponent('Cotización COT-'+String(q.numero).padStart(4,'0')+' — '+empresa);
   var body = encodeURIComponent('Estimado/a '+q.cliente+',\n\nAdjunto encontrará la cotización COT-'+String(q.numero).padStart(4,'0')+' correspondiente a '+(q.proyecto||'su proyecto')+'.\n\nTotal: '+formatMoney(q.total, q.moneda||'PEN')+'\n\nQuedamos atentos a sus comentarios.\n\n'+empresa);
   window.location.href = 'mailto:?subject='+subject+'&body='+body;
@@ -2640,12 +3083,24 @@ function generatePDF(id) {
   if (!q) return;
   var jsPDF = window.jspdf.jsPDF;
   var doc = new jsPDF('p', 'mm', 'a4');
-  var empresa = loadData('cfg_empresa','Polyline SAC');
-  var encargado = loadData('cfg_encargado','Arq. Luis Alberto Salas Castro');
-  var email = loadData('cfg_email','polylinesac@yahoo.com');
-  var tel = loadData('cfg_tel','+51 943 812 536');
-  var dir = loadData('cfg_dir','Av. Benavides 3008. Lima');
-  var condiciones = loadData('cfg_condiciones','Precios vigentes a la fecha de emisión. Validez de 15 días hábiles. Incluye IGV del 18%.');
+  var empresa =
+  APP.config?.nombre ||
+  'Polyline SAC';
+
+var encargado =
+  APP.config?.encargado || '';
+
+var email =
+  APP.config?.email || '';
+
+var tel =
+  APP.config?.telefono || '';
+
+var dir =
+  APP.config?.direccion || '';
+
+var condiciones =
+  APP.config?.condiciones || '';
   var monedaQ = (MONEDAS[q.moneda] ? MONEDAS[q.moneda] : MONEDAS.PEN);
   var simboloMoneda = monedaQ.simbolo;
   var localeMoneda = monedaQ.locale;

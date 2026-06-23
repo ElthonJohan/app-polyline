@@ -11,13 +11,57 @@ const supabaseClient = supabase.createClient(
 
 console.log("Supabase conectado");
 
-async function testProductos() {
-  const { data, error } = await supabaseClient
-    .from('productos')
-    .select('*');
+// async function testProductos() {
+//   const { data, error } = await supabaseClient
+//     .from('productos')
+//     .select('*');
 
-  console.log('DATA:', data);
-  console.log('ERROR:', error);
+//   console.log('DATA:', data);
+//   console.log('ERROR:', error);
+// }
+
+// testProductos();
+
+async function login(email, password) {
+
+  const { data, error } = await supabaseClient
+    .from('usuarios')
+    .select('*')
+    .eq('email', email)
+    .eq('password', password)
+    .eq('activo', true)
+    .single();
+
+  if (error) {
+    console.error(error);
+    return null;
+  }
+
+  return data;
 }
 
-testProductos();
+async function getEmpresaConfig() {
+
+  const { data, error } = await supabaseClient
+    .from('empresa_config')
+    .select('*')
+    .eq('id', 1)
+    .single();
+
+  if (error) {
+    console.error(error);
+    return null;
+  }
+
+  return data;
+}
+
+async function updateEmpresaConfig(config) {
+
+  const { error } = await supabaseClient
+    .from('empresa_config')
+    .update(config)
+    .eq('id', 1);
+
+  if (error) throw error;
+}
