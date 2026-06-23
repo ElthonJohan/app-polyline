@@ -624,6 +624,58 @@ async function handleLogin() {
   navigateTo("dashboard");
   toast("Bienvenido, " + user.nombre, "success");
 }
+
+async function checkSession() {
+
+  const {
+    data: { session }
+  } = await supabaseClient.auth.getSession();
+
+  console.log("SESSION:", session);
+
+  if (!session) return false;
+
+  const { data: usuario, error } =
+    await supabaseClient
+      .from("usuarios")
+      .select("*")
+      .eq("id", session.user.id)
+      .single();
+
+  if (error) {
+    console.error(error);
+    return false;
+  }
+
+  APP.user = usuario;
+
+  document.getElementById("login-screen").style.display = "none";
+  document.getElementById("app").style.display = "block";
+
+  document.getElementById("user-name").textContent =
+    usuario.nombre;
+
+  document.getElementById("user-role").textContent =
+    usuario.rol === "admin"
+      ? "Administrador"
+      : "Vendedor";
+
+  document.getElementById("user-avatar").textContent =
+    usuario.nombre.charAt(0).toUpperCase();
+
+  await initAppData();
+
+  const ultimaPagina =
+  localStorage.getItem("ultimaPagina") ||
+  "dashboard";
+
+navigateTo(ultimaPagina);
+updateCartBadge();
+
+  return true;
+}
+
+
 async function handleLogout() {
   await supabaseClient.auth.signOut();
 
@@ -655,16 +707,38 @@ var PAGE_TITLES = {
   proveedores: "Agenda de Proveedores",
   settings: "Configuración",
 };
-
 function navigateTo(page) {
+
+  console.log(
+    "NAVEGANDO A:",
+    page,
+    new Error().stack
+  );
+
   APP.page = page;
-  document.getElementById("page-title").textContent = PAGE_TITLES[page] || "";
+
+  localStorage.setItem(
+    "ultimaPagina",
+    page
+  );
+
+  document.getElementById("page-title").textContent =
+    PAGE_TITLES[page] || "";
+
   document.querySelectorAll(".nav-item").forEach(function (n) {
-    n.classList.toggle("active", n.dataset.page === page);
+    n.classList.toggle(
+      "active",
+      n.dataset.page === page
+    );
   });
+
   renderPage();
-  document.getElementById("sidebar").classList.remove("mobile-open");
+
+  document.getElementById("sidebar")
+    .classList.remove("mobile-open");
 }
+
+
 function toggleSidebar() {
   document.getElementById("sidebar").classList.toggle("mobile-open");
 }
@@ -791,7 +865,7 @@ function renderDashboard() {
   return (
     '<div class="max-w-7xl mx-auto">' +
     '<div class="mb-8"><h1 class="text-3xl md:text-4xl font-bold mb-2">Buenos días, ' +
-    esc(APP.user.nombre) +
+    (APP.user?.nombre || "Usuario") +
     '</h1><p style="color:var(--muted)">Resumen de tu catálogo y actividad reciente.</p></div>' +
     '<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">' +
     '<div class="stat-card"><div class="flex items-center gap-3 mb-3"><div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background:var(--accent-glow);color:var(--accent)"><i class="fas fa-boxes-stacked"></i></div></div><p class="text-2xl font-bold">' +
@@ -5467,3 +5541,14 @@ function toast(msg, type) {
   }
   if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) draw();
 })();
+
+
+window.addEventListener("load", async () => {
+
+  const tieneSesion = await checkSession();
+
+  if (!tieneSesion) {
+    document.getElementById("login-screen").style.display = "flex";
+  }
+
+});
